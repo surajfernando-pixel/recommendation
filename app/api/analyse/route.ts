@@ -85,7 +85,7 @@ Provide 4-6 AEO findings, 4-6 GEO findings, 3-5 competitors, and 5-7 quick wins.
 
   try {
     const response = await client.messages.create({
-      model: "claude-sonnet-4-5-20251001",
+      model: "claude-sonnet-4-6",
       max_tokens: 4000,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages: [{ role: "user", content: prompt }],
