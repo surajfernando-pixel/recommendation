@@ -27,14 +27,15 @@ export default function Home() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("aeo");
+  const [downloading, setDownloading] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepRef = useRef(0);
+  const analysedUrl = useRef("");
 
   function startProgress() {
     stepRef.current = 0;
     setProgress(STEPS[0].pct);
     setStatusMsg(STEPS[0].label);
-
     intervalRef.current = setInterval(() => {
       stepRef.current += 1;
       if (stepRef.current < STEPS.length) {
@@ -53,9 +54,7 @@ export default function Home() {
   }
 
   useEffect(() => {
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
   async function runAnalysis() {
@@ -64,6 +63,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setResult(null);
+    analysedUrl.current = trimmed;
     startProgress();
 
     try {
@@ -75,7 +75,6 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
       stopProgress(true);
-      // Brief pause so user sees 100% before results appear
       await new Promise(r => setTimeout(r, 400));
       setResult(data);
       setActiveTab("aeo");
@@ -87,14 +86,25 @@ export default function Home() {
     }
   }
 
+  async function handleDownload() {
+    if (!result) return;
+    setDownloading(true);
+    try {
+      const { generatePDF } = await import("./lib/generateReport");
+      generatePDF(result, analysedUrl.current);
+    } catch (e) {
+      console.error("PDF generation failed", e);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-neutral-950 text-white">
       <header className="border-b border-white/10 px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-md bg-emerald-500 flex items-center justify-center text-black text-xs font-bold">
-              AG
-            </div>
+            <div className="w-7 h-7 rounded-md bg-emerald-500 flex items-center justify-center text-black text-xs font-bold">AG</div>
             <span className="font-medium text-sm tracking-tight">AEO + GEO Analyser</span>
           </div>
           <span className="text-xs text-neutral-500">Powered by Claude + web search</span>
@@ -104,9 +114,7 @@ export default function Home() {
       <div className="max-w-3xl mx-auto px-6 py-12">
         {!result && !loading && (
           <div className="mb-10 text-center">
-            <h1 className="text-4xl font-semibold tracking-tight mb-3">
-              Optimise for AI-powered search
-            </h1>
+            <h1 className="text-4xl font-semibold tracking-tight mb-3">Optimise for AI-powered search</h1>
             <p className="text-neutral-400 text-base max-w-xl mx-auto leading-relaxed">
               Analyse any website for Answer Engine Optimisation (AEO) and Generative Engine Optimisation (GEO),
               with competitor benchmarking and actionable quick wins.
@@ -133,7 +141,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Progress bar */}
         {loading && (
           <div className="mb-8">
             <div className="flex items-center justify-between mb-2">
@@ -157,9 +164,35 @@ export default function Home() {
 
         {result && (
           <div>
-            <div className="mb-6 px-4 py-3 bg-white/5 rounded-lg text-sm text-neutral-300 leading-relaxed border border-white/5">
-              <span className="text-neutral-500 text-xs uppercase tracking-widest font-medium mr-2">Site</span>
-              {result.site_summary}
+            {/* Site summary + download button */}
+            <div className="mb-6 flex items-start gap-3">
+              <div className="flex-1 px-4 py-3 bg-white/5 rounded-lg text-sm text-neutral-300 leading-relaxed border border-white/5">
+                <span className="text-neutral-500 text-xs uppercase tracking-widest font-medium mr-2">Site</span>
+                {result.site_summary}
+              </div>
+              <button
+                onClick={handleDownload}
+                disabled={downloading}
+                className="shrink-0 flex items-center gap-2 px-4 py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-black text-sm font-semibold rounded-lg transition"
+              >
+                {downloading ? (
+                  <>
+                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25"/>
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                    </svg>
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v13M7 11l5 5 5-5"/>
+                      <path d="M5 21h14"/>
+                    </svg>
+                    Download PDF
+                  </>
+                )}
+              </button>
             </div>
 
             <ScoreCards scores={result.scores} />
@@ -170,9 +203,9 @@ export default function Home() {
             {activeTab === "competitors" && <CompetitorsPanel competitors={result.competitors} />}
             {activeTab === "improvements" && <ImprovementsPanel items={result.quick_wins} />}
 
-            {/* Token usage footer */}
-            {result.usage && (
-              <div className="mt-6 pt-4 border-t border-white/8 flex items-center justify-between">
+            {/* Token usage + reset footer */}
+            <div className="mt-6 pt-4 border-t border-white/8 flex items-center justify-between">
+              {result.usage && (
                 <div className="flex items-center gap-4 text-xs text-neutral-600">
                   <span>
                     <span className="text-neutral-500">Input</span>{" "}
@@ -192,20 +225,20 @@ export default function Home() {
                     <span className="text-neutral-600">tokens</span>
                   </span>
                 </div>
-                <button
-                  onClick={() => { setResult(null); setUrl(""); }}
-                  className="text-xs text-neutral-600 hover:text-white transition"
-                >
-                  ← Analyse another site
-                </button>
-              </div>
-            )}
+              )}
+              <button
+                onClick={() => { setResult(null); setUrl(""); }}
+                className="text-xs text-neutral-600 hover:text-white transition ml-auto"
+              >
+                ← Analyse another site
+              </button>
+            </div>
           </div>
         )}
 
         {!result && !loading && (
           <div className="mt-12 flex flex-wrap justify-center gap-2">
-            {["Schema & structured data", "Entity clarity", "E-E-A-T signals", "Topical authority", "Competitor gaps", "Quick wins"].map((f) => (
+            {["Schema & structured data","Entity clarity","E-E-A-T signals","Topical authority","Competitor gaps","Quick wins"].map((f) => (
               <span key={f} className="px-3 py-1.5 text-xs text-neutral-400 bg-white/5 border border-white/10 rounded-full">{f}</span>
             ))}
           </div>
