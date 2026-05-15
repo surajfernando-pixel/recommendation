@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AnalysisResult, TabId } from "./types";
 import ScoreCards from "./components/ScoreCards";
 import TabNav from "./components/TabNav";
@@ -8,13 +8,55 @@ import FindingsPanel from "./components/FindingsPanel";
 import CompetitorsPanel from "./components/CompetitorsPanel";
 import ImprovementsPanel from "./components/ImprovementsPanel";
 
+const STEPS = [
+  { pct: 8,  label: "Fetching site content..." },
+  { pct: 22, label: "Reading page structure and metadata..." },
+  { pct: 38, label: "Searching for competitors in the industry..." },
+  { pct: 54, label: "Evaluating AEO signals..." },
+  { pct: 68, label: "Evaluating GEO signals..." },
+  { pct: 80, label: "Benchmarking against competitors..." },
+  { pct: 90, label: "Generating recommendations..." },
+  { pct: 96, label: "Finalising report..." },
+];
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("aeo");
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stepRef = useRef(0);
+
+  function startProgress() {
+    stepRef.current = 0;
+    setProgress(STEPS[0].pct);
+    setStatusMsg(STEPS[0].label);
+
+    intervalRef.current = setInterval(() => {
+      stepRef.current += 1;
+      if (stepRef.current < STEPS.length) {
+        setProgress(STEPS[stepRef.current].pct);
+        setStatusMsg(STEPS[stepRef.current].label);
+      }
+    }, 3500);
+  }
+
+  function stopProgress(success: boolean) {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (success) {
+      setProgress(100);
+      setStatusMsg("Analysis complete!");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
   async function runAnalysis() {
     const trimmed = url.trim();
@@ -22,18 +64,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setResult(null);
-    setStatusMsg("Fetching and analysing site content...");
-
-    const msgs = [
-      "Searching for competitors in the industry...",
-      "Evaluating AEO signals...",
-      "Evaluating GEO signals...",
-      "Generating recommendations...",
-    ];
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < msgs.length) setStatusMsg(msgs[i++]);
-    }, 4000);
+    startProgress();
 
     try {
       const res = await fetch("/api/analyse", {
@@ -43,14 +74,16 @@ export default function Home() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
+      stopProgress(true);
+      // Brief pause so user sees 100% before results appear
+      await new Promise(r => setTimeout(r, 400));
       setResult(data);
       setActiveTab("aeo");
     } catch (e: unknown) {
+      stopProgress(false);
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
-      clearInterval(interval);
       setLoading(false);
-      setStatusMsg("");
     }
   }
 
@@ -81,7 +114,7 @@ export default function Home() {
           </div>
         )}
 
-        <div className="flex gap-3 mb-8">
+        <div className="flex gap-3 mb-6">
           <input
             type="text"
             value={url}
@@ -100,13 +133,19 @@ export default function Home() {
           </button>
         </div>
 
+        {/* Progress bar */}
         {loading && (
-          <div className="flex items-center gap-3 px-4 py-3 bg-white/5 rounded-lg mb-8 text-sm text-neutral-400">
-            <svg className="animate-spin w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
-              <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-            </svg>
-            {statusMsg}
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-neutral-400">{statusMsg}</span>
+              <span className="text-sm font-medium text-emerald-400 tabular-nums">{progress}%</span>
+            </div>
+            <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 rounded-full transition-all duration-700 ease-out"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
           </div>
         )}
 
@@ -131,14 +170,36 @@ export default function Home() {
             {activeTab === "competitors" && <CompetitorsPanel competitors={result.competitors} />}
             {activeTab === "improvements" && <ImprovementsPanel items={result.quick_wins} />}
 
-            <div className="mt-8 pt-6 border-t border-white/10 text-center">
-              <button
-                onClick={() => { setResult(null); setUrl(""); }}
-                className="text-sm text-neutral-500 hover:text-white transition"
-              >
-                ← Analyse another site
-              </button>
-            </div>
+            {/* Token usage footer */}
+            {result.usage && (
+              <div className="mt-6 pt-4 border-t border-white/8 flex items-center justify-between">
+                <div className="flex items-center gap-4 text-xs text-neutral-600">
+                  <span>
+                    <span className="text-neutral-500">Input</span>{" "}
+                    <span className="text-neutral-400 tabular-nums font-medium">{result.usage.input_tokens.toLocaleString()}</span>{" "}
+                    <span className="text-neutral-600">tokens</span>
+                  </span>
+                  <span className="text-neutral-700">·</span>
+                  <span>
+                    <span className="text-neutral-500">Output</span>{" "}
+                    <span className="text-neutral-400 tabular-nums font-medium">{result.usage.output_tokens.toLocaleString()}</span>{" "}
+                    <span className="text-neutral-600">tokens</span>
+                  </span>
+                  <span className="text-neutral-700">·</span>
+                  <span>
+                    <span className="text-neutral-500">Total</span>{" "}
+                    <span className="text-emerald-600 tabular-nums font-medium">{result.usage.total_tokens.toLocaleString()}</span>{" "}
+                    <span className="text-neutral-600">tokens</span>
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setResult(null); setUrl(""); }}
+                  className="text-xs text-neutral-600 hover:text-white transition"
+                >
+                  ← Analyse another site
+                </button>
+              </div>
+            )}
           </div>
         )}
 

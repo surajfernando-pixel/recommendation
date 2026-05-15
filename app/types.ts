@@ -17,6 +17,12 @@ export interface QuickWin {
   action: string;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
 export interface AnalysisResult {
   scores: {
     aeo: number;
@@ -28,6 +34,7 @@ export interface AnalysisResult {
   geo_findings: Finding[];
   competitors: Competitor[];
   quick_wins: QuickWin[];
+  usage: TokenUsage;
 }
 
 export type TabId = "aeo" | "geo" | "competitors" | "improvements";

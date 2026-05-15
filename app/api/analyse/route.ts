@@ -5,6 +5,9 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+type MessageParam = Anthropic.MessageParam;
+type ContentBlock = Anthropic.ContentBlock;
+
 export async function POST(req: NextRequest) {
   const { url } = await req.json();
 
@@ -84,37 +87,99 @@ GEO scoring criteria (generative AI citation likelihood):
 Provide 4-6 AEO findings, 4-6 GEO findings, 3-5 competitors, and 5-7 quick wins. Be specific and actionable. Scores should be honest and calibrated.`;
 
   try {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: prompt }],
-    });
+    const messages: MessageParam[] = [
+      { role: "user", content: prompt }
+    ];
 
-    const textContent = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { type: "text"; text: string }).text)
-      .join("");
+    const tools: Anthropic.Tool[] = [
+      { type: "web_search_20250305", name: "web_search" } as unknown as Anthropic.Tool
+    ];
 
-    if (!textContent) {
+    let finalText = "";
+    let iterations = 0;
+    const maxIterations = 10;
+
+    // Accumulate token usage across all turns
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    while (iterations < maxIterations) {
+      iterations++;
+
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4000,
+        tools,
+        messages,
+      });
+
+      // Accumulate tokens from each API call
+      totalInputTokens += response.usage.input_tokens;
+      totalOutputTokens += response.usage.output_tokens;
+
+      const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
+      if (textBlocks.length > 0) {
+        finalText = textBlocks.map(b => b.text).join("");
+      }
+
+      if (response.stop_reason === "end_turn") {
+        break;
+      }
+
+      if (response.stop_reason === "tool_use") {
+        messages.push({
+          role: "assistant",
+          content: response.content as ContentBlock[],
+        });
+
+        const toolUseBlocks = response.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+        );
+
+        const toolResults: Anthropic.ToolResultBlockParam[] = toolUseBlocks.map((block) => ({
+          type: "tool_result" as const,
+          tool_use_id: block.id,
+          content: JSON.stringify(block.input),
+        }));
+
+        messages.push({
+          role: "user",
+          content: toolResults,
+        });
+
+        continue;
+      }
+
+      break;
+    }
+
+    if (!finalText) {
       return NextResponse.json(
-        { error: "No text response received from the model. The model may have only returned tool calls." },
+        { error: "No text response received after tool use. Please try again." },
         { status: 500 }
       );
     }
 
-    const cleaned = textContent.replace(/```json|```/g, "").trim();
+    const cleaned = finalText.replace(/```json|```/g, "").trim();
     const jsonStart = cleaned.indexOf("{");
     const jsonEnd = cleaned.lastIndexOf("}");
 
     if (jsonStart === -1 || jsonEnd === -1) {
       return NextResponse.json(
-        { error: "Could not find JSON in model response. Raw response: " + cleaned.substring(0, 200) },
+        { error: "Could not find JSON in model response. Raw: " + cleaned.substring(0, 300) },
         { status: 500 }
       );
     }
 
     const parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+
+    // Attach token usage to the response
+    parsed.usage = {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      total_tokens: totalInputTokens + totalOutputTokens,
+    };
+
     return NextResponse.json(parsed);
 
   } catch (err: unknown) {
