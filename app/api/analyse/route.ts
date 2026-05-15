@@ -12,6 +12,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "URL is required" }, { status: 400 });
   }
 
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json(
+      { error: "ANTHROPIC_API_KEY is not set. Add it to your .env.local file or Vercel environment variables." },
+      { status: 500 }
+    );
+  }
+
   const prompt = `You are an expert in AEO (Answer Engine Optimisation) and GEO (Generative Engine Optimisation).
 
 Use web search to:
@@ -78,7 +85,7 @@ Provide 4-6 AEO findings, 4-6 GEO findings, 3-5 competitors, and 5-7 quick wins.
 
   try {
     const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5-20251001",
       max_tokens: 4000,
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages: [{ role: "user", content: prompt }],
@@ -89,17 +96,45 @@ Provide 4-6 AEO findings, 4-6 GEO findings, 3-5 competitors, and 5-7 quick wins.
       .map((b) => (b as { type: "text"; text: string }).text)
       .join("");
 
+    if (!textContent) {
+      return NextResponse.json(
+        { error: "No text response received from the model. The model may have only returned tool calls." },
+        { status: 500 }
+      );
+    }
+
     const cleaned = textContent.replace(/```json|```/g, "").trim();
     const jsonStart = cleaned.indexOf("{");
     const jsonEnd = cleaned.lastIndexOf("}");
-    const parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
 
+    if (jsonStart === -1 || jsonEnd === -1) {
+      return NextResponse.json(
+        { error: "Could not find JSON in model response. Raw response: " + cleaned.substring(0, 200) },
+        { status: 500 }
+      );
+    }
+
+    const parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
     return NextResponse.json(parsed);
-  } catch (err) {
-    console.error(err);
-    return NextResponse.json(
-      { error: "Analysis failed. Please try again." },
-      { status: 500 }
-    );
+
+  } catch (err: unknown) {
+    console.error("Analysis error:", err);
+
+    if (err instanceof Anthropic.APIError) {
+      return NextResponse.json(
+        { error: `API error ${err.status}: ${err.message}` },
+        { status: err.status ?? 500 }
+      );
+    }
+
+    if (err instanceof SyntaxError) {
+      return NextResponse.json(
+        { error: "Failed to parse JSON from model response. Please try again." },
+        { status: 500 }
+      );
+    }
+
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
